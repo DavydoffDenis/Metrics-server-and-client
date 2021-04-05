@@ -7,8 +7,8 @@ import asyncio
 
 class AsyncioServer(asyncio.Protocol):
     
-    metrics_storage = dict()  # Хранилище метрик в виде словаря
-    
+    metrics_storage = list()  # Хранилище метрик в виде словаря
+
     def connection_made(self, transport):
         self.transport = transport
 
@@ -16,18 +16,50 @@ class AsyncioServer(asyncio.Protocol):
         pass
     
     def data_received(self, data):  # метод вызывающийся по принятию от клиента сообщения, data - есть само сообщение
-        
-        command, request_data = data.decode().split(maxsplit = 1)
-        
+        try:
+            command, request_data = data.decode().split(maxsplit = 1)
+        except ValueError:
+            self.transport.write("error\nwrong command\n\n".encode())
+            return
         if command not in ["put", "get"]:
             self.transport.write("error\nwrong command\n\n".encode())
             return
         elif command == "put":
-            key, value, timestamp = request_data.split()
-            AsyncioServer.metrics_storage[key] = (float(value), int(timestamp))
-            
-        resp = self.process_client_request(data.decode())
-        self.transport.write(resp.encode())
+            try:
+                key, value, timestamp = request_data.split()
+                # Проверка на запись в ячейку с уже существующей timestamp
+                if bool(AsyncioServer.metrics_storage):
+                    written = False  # Индикатор того, перезаписывалась ли ячейка
+                    for idx, item in enumerate(AsyncioServer.metrics_storage):
+                        if item[2] == int(timestamp) and item[0] == key:
+                            AsyncioServer.metrics_storage[idx] = (key, float(value), int(timestamp))  # Перезаписываем эту ячейку
+                            written = True
+                            break
+                        elif item[2] > int(timestamp) and item[0] == key:
+                            AsyncioServer.metrics_storage.insert(idx, (key, float(value), int(timestamp)))
+                            written = True
+                            break
+                    if written == False:
+                        AsyncioServer.metrics_storage.append((key, float(value), int(timestamp)))
+                else:
+                    AsyncioServer.metrics_storage.append((key, float(value), int(timestamp)))
+                self.transport.write("ok\n\n".encode())
+            except ValueError:
+                self.transport.write("error\nwrong command\n\n".encode())
+                return
+        elif command == "get":
+            key = request_data.strip()  # Запрашиваемый ключ
+            if len(request_data.split()) > 1:  # Посылаем ошибку, если нарушен формат ключа
+                self.transport.write("error\nwrong command\n\n".encode())
+                return
+            else:
+                response = "ok\n"  # Формируем ответ на запрос в строке response
+                for item in AsyncioServer.metrics_storage:
+                    if item[0] == key or key == "*":
+                        response += " ".join([str(i) for i in item]) + "\n"
+                    
+                response += "\n"
+                self.transport.write(response.encode())
 
 def run_server(host = "localhost", port = 8888):
     loop = asyncio.get_event_loop()
